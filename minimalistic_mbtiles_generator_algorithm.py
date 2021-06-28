@@ -32,10 +32,13 @@ __revision__ = '$Format:%H$'
 
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.core import (QgsProcessing,
-                       QgsFeatureSink,
                        QgsProcessingAlgorithm,
                        QgsProcessingParameterFeatureSource,
-                       QgsProcessingParameterFeatureSink)
+                       QgsProcessingParameterFileDestination,
+                       QgsProcessingParameterNumber,
+                       QgsReferencedRectangle)
+from qgis import processing
+import sqlite3
 
 
 class MinimalisticMBTilesGeneratorAlgorithm(QgsProcessingAlgorithm):
@@ -56,8 +59,10 @@ class MinimalisticMBTilesGeneratorAlgorithm(QgsProcessingAlgorithm):
     # used when calling the algorithm from another algorithm, or when
     # calling from the QGIS console.
 
-    OUTPUT = 'OUTPUT'
+    OUTPUT_FILE = 'OUTPUT_FILE'
     INPUT = 'INPUT'
+    ZOOM_MIN = 'ZOOM_MIN'
+    ZOOM_MAX = 'ZOOM_MAX'
 
     def initAlgorithm(self, config):
         """
@@ -79,9 +84,30 @@ class MinimalisticMBTilesGeneratorAlgorithm(QgsProcessingAlgorithm):
         # usually takes the form of a newly created vector layer when the
         # algorithm is run in QGIS).
         self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT,
-                self.tr('Output layer')
+            QgsProcessingParameterNumber(
+                self.ZOOM_MIN,
+                self.tr('Minimum zoom'),
+                minValue=0,
+                maxValue=25,
+                defaultValue=0,
+            )
+        )
+
+        self.addParameter(
+            QgsProcessingParameterNumber(
+                self.ZOOM_MAX,
+                self.tr('Maximum zoom'),
+                minValue=0,
+                maxValue=25,
+                defaultValue=19,
+            )
+        )
+
+        self.addParameter(
+            QgsProcessingParameterFileDestination(
+                self.OUTPUT_FILE,
+                self.tr('Output file (for MBTiles)'),
+                self.tr('MBTiles files (*.mbtiles)'),
             )
         )
 
@@ -94,21 +120,45 @@ class MinimalisticMBTilesGeneratorAlgorithm(QgsProcessingAlgorithm):
         # to uniquely identify the feature sink, and must be included in the
         # dictionary returned by the processAlgorithm function.
         source = self.parameterAsSource(parameters, self.INPUT, context)
-        (sink, dest_id) = self.parameterAsSink(parameters, self.OUTPUT,
-                context, source.fields(), source.wkbType(), source.sourceCrs())
+        output_file = self.parameterAsString(parameters, self.OUTPUT_FILE, context)
+
+        min_zoom = self.parameterAsInt(parameters, self.ZOOM_MIN, context)
+        max_zoom = self.parameterAsInt(parameters, self.ZOOM_MAX, context)
+
+        crs = source.sourceCrs()
 
         # Compute the number of steps to display within the progress bar and
         # get features from source
         total = 100.0 / source.featureCount() if source.featureCount() else 0
         features = source.getFeatures()
 
+        # Initialize an almost empty mbtiles files with some basic metadata
+        processing.run("qgis:tilesxyzmbtiles", {
+            "EXTENT" : QgsReferencedRectangle(source.sourceExtent(), crs),
+            "ZOOM_MIN": min_zoom,
+            "ZOOM_MAX": min_zoom,
+            "OUTPUT_FILE": output_file,
+        })
+
         for current, feature in enumerate(features):
             # Stop the algorithm if cancel button has been clicked
             if feedback.isCanceled():
                 break
 
-            # Add a feature in the sink
-            sink.addFeature(feature, QgsFeatureSink.FastInsert)
+            bbox = QgsReferencedRectangle(feature.geometry().boundingBox(), crs)
+            partial = processing.run("qgis:tilesxyzmbtiles", {
+                "EXTENT" : bbox,
+                "ZOOM_MIN": min_zoom,
+                "ZOOM_MAX": max_zoom,
+                "OUTPUT_FILE": QgsProcessing.TEMPORARY_OUTPUT,
+            })['OUTPUT_FILE']
+
+            # Add the newly generated tiles to the output file
+            with sqlite3.connect(output_file) as conn:
+                conn.execute("ATTACH DATABASE ? AS partial", (partial,))
+                conn.execute("INSERT OR REPLACE INTO tiles SELECT * FROM partial.tiles")
+                conn.execute("UPDATE metadata SET value=(SELECT MIN(zoom_level) FROM tiles) WHERE name='minzoom'")
+                conn.execute("UPDATE metadata SET value=(SELECT MAX(zoom_level) FROM tiles) WHERE name='maxzoom'")
 
             # Update the progress bar
             feedback.setProgress(int(current * total))
@@ -119,7 +169,7 @@ class MinimalisticMBTilesGeneratorAlgorithm(QgsProcessingAlgorithm):
         # statistics, etc. These should all be included in the returned
         # dictionary, with keys matching the feature corresponding parameter
         # or output names.
-        return {self.OUTPUT: dest_id}
+        return {self.OUTPUT_FILE: output_file}
 
     def name(self):
         """
