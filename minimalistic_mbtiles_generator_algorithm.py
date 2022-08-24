@@ -36,7 +36,8 @@ from qgis.core import (QgsProcessing,
                        QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFileDestination,
                        QgsProcessingParameterNumber,
-                       QgsReferencedRectangle)
+                       QgsReferencedRectangle,
+                       QgsProject)
 from qgis import processing
 import sqlite3
 
