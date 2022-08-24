@@ -18,3 +18,7 @@ cd minimalistic-mbtiles-generator/
 export PYTHONPATH=/usr/share/qgis/python
 pb_tool deploy -p $HOME/.local/share/QGIS/QGIS3/profiles/default/python/plugins/
 ```
+
+# Known limitations
+
+The input layer CRS should match the project CRS.
