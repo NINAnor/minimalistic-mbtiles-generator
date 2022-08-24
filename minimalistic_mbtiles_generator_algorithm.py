@@ -106,7 +106,7 @@ class MinimalisticMBTilesGeneratorAlgorithm(QgsProcessingAlgorithm):
         min_zoom = self.parameterAsInt(parameters, self.ZOOM_MIN, context)
         max_zoom = self.parameterAsInt(parameters, self.ZOOM_MAX, context)
 
-        crs = source.sourceCrs()
+        crs = QgsProject().instance().crs()
 
         # Compute the number of steps to display within the progress bar and
         # get features from source
